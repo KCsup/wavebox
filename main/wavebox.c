@@ -24,6 +24,6 @@ void app_main(void)
         gpio_state = !gpio_state;
         gpio_set_level(PIN_OUT, gpio_state);
 
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(300 / portTICK_PERIOD_MS);
     }
 }
