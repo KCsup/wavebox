@@ -10,5 +10,7 @@ set(BTSTACK_ROOT ${BLUEPAD32_ROOT}/external/btstack)
 set(EXTRA_COMPONENT_DIRS
   ${BLUEPAD32_ROOT}/src/components)
 
+add_compile_definitions(CONFIG_BLUEPAD32_PLATFORM_CUSTOM=1)
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(wavebox)

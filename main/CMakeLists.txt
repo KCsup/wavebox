@@ -1,7 +1,5 @@
-set(srcs "wavebox.c")
+set(requires bluepad32 btstack)
 
-set(requires "bluepad32" "btstack")
-
-idf_component_register(SRCS "${srcs}"
-                    INCLUDE_DIRS "."
+idf_component_register(SRC_DIRS "./src"
+                    INCLUDE_DIRS "./include"
                     REQUIRES "${requires}")
