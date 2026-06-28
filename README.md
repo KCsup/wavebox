@@ -8,5 +8,7 @@ git submodule add https://github.com/ricardoquesada/bluepad32.git
 git submodule update --init --recursive
 cd bluepad32/external/btstack
 git apply ../patches/*.patch
-cd ../../../../ # return to base dir
+cd ports/esp32
+IDF_PATH=../../../../src ./integrate_btstack.py
+cd ../../../../../../ # return to base dir
 ```
