@@ -32,7 +32,6 @@ int app_main(void)
 #endif  // CONFIG_BLUEPAD32_USB_CONSOLE_ENABLE
 #endif  // CONFIG_ESP_CONSOLE_UART
 
-    // TODO: find init function for btstack
     btstack_init();
 
     // from my_platform
