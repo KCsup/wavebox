@@ -2,8 +2,12 @@
 // Need help? https://tinyurl.com/bluepad32-help
 
 #include <string.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 
 #include "my_platform.h"
+#include "controller/uni_controller.h"
+#include "wavebox.h"
 
 // Custom "instance"
 typedef struct my_platform_instance_s {
@@ -66,9 +70,10 @@ static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char* 
     // @param cod: Class of Device. See "uni_bt_defines.h" for possible values.
     // @param rssi: Received Signal Strength Indicator (RSSI) measured in dBms. The higher (255) the better.
 
-    // As an example, if you want to filter out keyboards, do:
-    if (((cod & UNI_BT_COD_MINOR_MASK) & UNI_BT_COD_MINOR_KEYBOARD) == UNI_BT_COD_MINOR_KEYBOARD) {
-        logi("Ignoring keyboard\n");
+    // filter out non-gamepads
+    if(((cod & UNI_BT_COD_MINOR_MASK) & UNI_BT_COD_MINOR_GAMEPAD) != UNI_BT_COD_MINOR_GAMEPAD)
+    {
+        logi("Ignoring non-gamepad\n");
         return UNI_ERROR_IGNORE_DEVICE;
     }
 
@@ -77,10 +82,18 @@ static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char* 
 
 static void my_platform_on_device_connected(uni_hid_device_t* d) {
     logi("custom: device connected: %p\n", d);
+
+    // TODO: find if handling 1 connection is better limited in sdkconfig
+    uni_bt_allow_incoming_connections(false);
+    uni_bt_stop_scanning_safe();
 }
 
 static void my_platform_on_device_disconnected(uni_hid_device_t* d) {
     logi("custom: device disconnected: %p\n", d);
+
+    // TODO: same as note above (1 connection limit handle)
+    uni_bt_allow_incoming_connections(true);
+    uni_bt_start_scanning_and_autoconnect_safe();
 }
 
 static uni_error_t my_platform_on_device_ready(uni_hid_device_t* d) {
@@ -89,6 +102,9 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t* d) {
     ins->gamepad_seat = GAMEPAD_SEAT_A;
 
     trigger_event_on_gamepad(d);
+
+    // push gamepad data to RTOS queue for joybus handling
+    xQueueOverwrite(controller_state_queue, &d->controller.gamepad);
     return UNI_ERROR_SUCCESS;
 }
 
@@ -96,7 +112,6 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
     static uint8_t leds = 0;
     static uint8_t enabled = true;
     static uni_controller_t prev = {0};
-    uni_gamepad_t* gp;
 
     // Optimization to avoid processing the previous data so that the console
     // does not get spammed with a lot of logs, but remove it from your project.
@@ -110,45 +125,43 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
     //    logi("(%p), id=%d, \n", d, uni_hid_device_get_idx_for_instance(d));
     //    uni_controller_dump(ctl);
 
-    switch (ctl->klass) {
-        case UNI_CONTROLLER_CLASS_GAMEPAD:
-            gp = &ctl->gamepad;
+    if(ctl->klass != UNI_CONTROLLER_CLASS_GAMEPAD) return;
+    // only handling gamepad connections
 
-            logi("Battery: %d\n", ctl->battery);
+    uni_gamepad_t* gp = &ctl->gamepad;
 
-            // Debugging
-            // Axis ry: control rumble
-            if ((gp->buttons & BUTTON_A) && d->report_parser.play_dual_rumble != NULL) {
-                d->report_parser.play_dual_rumble(d, 0 /* delayed start ms */, 250 /* duration ms */,
-                                                  255 /* weak magnitude */, 0 /* strong magnitude */);
-            }
-            // Buttons: Control LEDs On/Off
-            if ((gp->buttons & BUTTON_B) && d->report_parser.set_player_leds != NULL) {
-                d->report_parser.set_player_leds(d, leds++ & 0x0f);
-            }
-            // Axis: control RGB color
-            if ((gp->buttons & BUTTON_X) && d->report_parser.set_lightbar_color != NULL) {
-                uint8_t r = (gp->axis_x * 256) / 512;
-                uint8_t g = (gp->axis_y * 256) / 512;
-                uint8_t b = (gp->axis_rx * 256) / 512;
-                d->report_parser.set_lightbar_color(d, r, g, b);
-            }
+    // push gamepad data to RTOS queue for joybus handling
+    xQueueOverwrite(controller_state_queue, gp);
 
-            // Toggle Bluetooth connections
-            if ((gp->buttons & BUTTON_SHOULDER_L) && enabled) {
-                logi("*** Stop scanning\n");
-                uni_bt_stop_scanning_safe();
-                enabled = false;
-            }
-            if ((gp->buttons & BUTTON_SHOULDER_R) && !enabled) {
-                logi("*** Start scanning\n");
-                uni_bt_start_scanning_and_autoconnect_safe();
-                enabled = true;
-            }
-            break;
-        default:
-            break;
-    }
+    // Debugging
+    // Axis ry: control rumble
+    // if ((gp->buttons & BUTTON_A) && d->report_parser.play_dual_rumble != NULL) {
+    //     d->report_parser.play_dual_rumble(d, 0 /* delayed start ms */, 250 /* duration ms */,
+    //                                       255 /* weak magnitude */, 0 /* strong magnitude */);
+    // }
+    // // Buttons: Control LEDs On/Off
+    // if ((gp->buttons & BUTTON_B) && d->report_parser.set_player_leds != NULL) {
+    //     d->report_parser.set_player_leds(d, leds++ & 0x0f);
+    // }
+    // // Axis: control RGB color
+    // if ((gp->buttons & BUTTON_X) && d->report_parser.set_lightbar_color != NULL) {
+    //     uint8_t r = (gp->axis_x * 256) / 512;
+    //     uint8_t g = (gp->axis_y * 256) / 512;
+    //     uint8_t b = (gp->axis_rx * 256) / 512;
+    //     d->report_parser.set_lightbar_color(d, r, g, b);
+    // }
+
+    // // Toggle Bluetooth connections
+    // if ((gp->buttons & BUTTON_SHOULDER_L) && enabled) {
+    //     logi("*** Stop scanning\n");
+    //     uni_bt_stop_scanning_safe();
+    //     enabled = false;
+    // }
+    // if ((gp->buttons & BUTTON_SHOULDER_R) && !enabled) {
+    //     logi("*** Start scanning\n");
+    //     uni_bt_start_scanning_and_autoconnect_safe();
+    //     enabled = true;
+    // }
 }
 
 static const uni_property_t* my_platform_get_property(uni_property_idx_t idx) {

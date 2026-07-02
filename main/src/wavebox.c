@@ -1,8 +1,9 @@
 #include <stdio.h>
 #include <driver/gpio.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "controller/uni_gamepad.h"
 
+#include "wavebox.h"
+#include "freertos/idf_additions.h"
 #include "my_platform.h"
 
 // bluepad requirements
@@ -23,8 +24,27 @@
 #error "Must use BLUEPAD32_PLATFORM_CUSTOM"
 #endif
 
+void print_controller_state_test(void*);
+
+// extern global var from wavebox.h
+// allows access for files including
+QueueHandle_t controller_state_queue;
+
 int app_main(void)
 {
+    controller_state_queue = xQueueCreate(1, sizeof(uni_gamepad_t));
+
+    xTaskCreatePinnedToCore(
+        print_controller_state_test,
+        "controller_print",
+        4096, // ?
+        (void*) controller_state_queue,
+        5,
+        NULL,
+        1 // assuming btstack on core 0
+    );
+
+    // bluepad stack init
 
 #ifdef CONFIG_ESP_CONSOLE_UART
 #ifndef CONFIG_BLUEPAD32_USB_CONSOLE_ENABLE
@@ -43,4 +63,25 @@ int app_main(void)
     btstack_run_loop_execute();
     
     return 0;
+}
+
+void print_controller_state_test(void* controller_queue)
+{
+    gpio_config_t io_conf = {};
+
+    io_conf.intr_type = GPIO_INTR_DISABLE; // disable interrupts
+    io_conf.mode = GPIO_MODE_OUTPUT; // set as output
+    io_conf.pin_bit_mask = PIN_MASK;
+    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    gpio_config(&io_conf);
+    
+    // TODO: handle no queue state pushed
+    while(1)
+    {
+        uni_gamepad_t gp;
+        xQueueReceive(controller_queue, &gp, portMAX_DELAY); // wait indefinitely
+
+        gpio_set_level(PIN_OUT, !(gp.buttons & BUTTON_A));
+    }
 }
