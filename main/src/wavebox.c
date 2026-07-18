@@ -8,6 +8,7 @@
 #include "freertos/idf_additions.h"
 #include "hal/rmt_types.h"
 #include "my_platform.h"
+#include "joybus.h"
 
 // bluepad requirements
 #include <btstack_port_esp32.h>
@@ -150,8 +151,31 @@ void wavebox_exec_task(void* controller_queue)
         rmt_rx_done_event_data_t rx_event_data;
         xQueueReceive(rmt_rx_queue, &rx_event_data, portMAX_DELAY);
 
+        // during testing, the stop bytes was always appended to the end of
+        // the symbol transactions
+        // plus, erronious transactions had single symbols added (with zero
+        // durations for both logic leves)
+        // SO, the length of symbols will be checked as their reported length
+        // minus one, which should give clean multiples of 8 for byte parsin
+        if(rx_event_data.num_symbols <= 1) continue;
+
+        // again, assuming the last bit is the stop bit, so ignoring
+        const int joybus_bytes_len = BYTES_LEN(rx_event_data.num_symbols - 1);
+        logi("BYTES LEN: %d, from %d\n", joybus_bytes_len, rx_event_data.num_symbols - 1);
+        uint8_t joybus_bytes[joybus_bytes_len];
+        // returns false if an invalid joybus bit was received
+        if(!get_joybus_bytes(rx_event_data.received_symbols,
+                             rx_event_data.num_symbols - 1,
+                             joybus_bytes)) continue;
+
         // TODO: parse rx event data
         logi("START OF RX WORD:\n");
+
+        for(int i = 0; i < joybus_bytes_len; i++)
+        {
+            logi("JOYBUS BYTE %d: %X\n", i, joybus_bytes[i]);
+        }
+        
         for(int i = 0; i < rx_event_data.num_symbols; i++)
             logi("RX %d: dur0 %d, level0 %d | dur1 %d, level1 %d\n", i, rx_event_data.received_symbols[i].duration0, rx_event_data.received_symbols[i].level0, rx_event_data.received_symbols[i].duration1, rx_event_data.received_symbols[i].level1);
         logi("----\n\n");
