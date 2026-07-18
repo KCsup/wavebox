@@ -161,12 +161,23 @@ void wavebox_exec_task(void* controller_queue)
 
         // again, assuming the last bit is the stop bit, so ignoring
         const int joybus_bytes_len = BYTES_LEN(rx_event_data.num_symbols - 1);
-        logi("BYTES LEN: %d, from %d\n", joybus_bytes_len, rx_event_data.num_symbols - 1);
+
+        // if not enough bits for full command byte, ignore
+        if(joybus_bytes_len < 1) continue;
+
         uint8_t joybus_bytes[joybus_bytes_len];
         // returns false if an invalid joybus bit was received
         if(!get_joybus_bytes(rx_event_data.received_symbols,
                              rx_event_data.num_symbols - 1,
                              joybus_bytes)) continue;
+
+        switch(joybus_bytes[0]) // must be at least a single byte
+        {
+            case 0x00: // ID
+
+            default: // not handled command byte
+                continue;
+        }
 
         // TODO: parse rx event data
         logi("START OF RX WORD:\n");
