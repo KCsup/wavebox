@@ -3,6 +3,7 @@
 #include "controller/uni_gamepad.h"
 
 #include "wavebox.h"
+#include "driver/rmt_encoder.h"
 #include "driver/rmt_types.h"
 #include "esp_err.h"
 #include "freertos/idf_additions.h"
@@ -19,6 +20,7 @@
 #include <uni.h>
 
 #include <driver/rmt_rx.h>
+#include <driver/rmt_tx.h>
 
 #include "portmacro.h"
 #include "sdkconfig.h"
@@ -36,6 +38,7 @@
 #endif
 
 void wavebox_exec_task(void*);
+void rmt_tx_test(void*);
 
 // extern global var from wavebox.h
 // allows access for files including
@@ -46,8 +49,8 @@ int app_main(void)
     controller_state_queue = xQueueCreate(1, sizeof(uni_gamepad_t));
 
     xTaskCreatePinnedToCore(
-        wavebox_exec_task,
-        "controller_print",
+        rmt_tx_test,
+        "wavebox_exec",
         4096, // ?
         (void*) controller_state_queue,
         5,
@@ -74,6 +77,65 @@ int app_main(void)
     btstack_run_loop_execute();
     
     return 0;
+}
+
+void rmt_tx_test(void* args)
+{
+    // joybus RMT TX channel setup
+    // ----
+
+    rmt_channel_handle_t tx_chann = NULL;
+    rmt_tx_channel_config_t tx_chann_conf = {
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .gpio_num = JOYBUS_GPIO,
+        .mem_block_symbols = 64, // TODO: find if this is sufficient for needed symbol
+        .resolution_hz = JOYBUS_CLK_PRECISION, // 10 MHz
+        .trans_queue_depth = 1,
+        .flags.invert_out = false,
+        .flags.with_dma = false,
+        .flags.io_loop_back = true, // TODO: see if this functions with both RX and TX enabled
+        .flags.io_od_mode = false
+    };
+
+    ESP_ERROR_CHECK(rmt_new_tx_channel(&tx_chann_conf, &tx_chann));
+
+    // no callbacks atm
+
+    
+    ESP_ERROR_CHECK(rmt_enable(tx_chann));
+    
+    // ----
+
+    rmt_bytes_encoder_config_t rmt_encoder_conf = {
+        .bit0 = {
+            .duration0 = JOYBUS_BIT_MIN_TICKS * 3,
+            .level0 = 0,
+            .duration1 = JOYBUS_BIT_MIN_TICKS,
+            .level1 = 1
+        },
+        .bit1 = {
+            .duration0 = JOYBUS_BIT_MIN_TICKS,
+            .level0 = 0,
+            .duration1 = JOYBUS_BIT_MIN_TICKS * 3,
+            .level1 = 1
+        },
+        .flags.msb_first = true
+    };
+
+    rmt_encoder_handle_t tx_chann_encoder;
+    ESP_ERROR_CHECK(rmt_new_bytes_encoder(&rmt_encoder_conf, &tx_chann_encoder));
+
+    // initiate TX transaction
+
+    rmt_transmit_config_t rmt_transmit_conf = {
+        .loop_count = 0,
+        .flags.queue_nonblocking = false
+    };
+
+    uint8_t payload[] = {0x08};
+
+    while(1)
+        rmt_transmit(tx_chann, tx_chann_encoder, payload, sizeof(payload), &rmt_transmit_conf);
 }
 
 bool joybus_rx_callback(rmt_channel_handle_t rx_chann, const rmt_rx_done_event_data_t* edata, void* user_ctx)
@@ -110,14 +172,15 @@ void wavebox_exec_task(void* controller_queue)
     
     rmt_rx_channel_config_t rx_chann_conf = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10 * 1000 * 1000, // 10 MHz tick resolution, so 1 tick = 0.1 us
+        .resolution_hz = JOYBUS_CLK_PRECISION, // 10 MHz tick resolution, so 1 tick = 0.1 us
         .mem_block_symbols = 64, // at least 64?
         // equaling 256 bytes (x4)?
         // TODO: find if this is needed for joybus command parsing (which looks)
         //       to only require 3 bytes of maximum data
         .gpio_num = JOYBUS_GPIO,
         .flags.invert_in = false,
-        .flags.with_dma = false
+        .flags.with_dma = false,
+        .flags.io_loop_back = true
     };
 
     ESP_ERROR_CHECK(rmt_new_rx_channel(&rx_chann_conf, &rx_chann));
