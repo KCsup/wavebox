@@ -6,8 +6,6 @@ int get_joybus_bytes(rmt_symbol_word_t* received_symbols,
                       size_t len_symbols,
                       uint8_t bytes_buffer[BYTES_LEN(len_symbols)])
 {
-    uint8_t out_bytes[BYTES_LEN(len_symbols)];
-
     int byte_i = 0;
     uint8_t current_byte = 0;
 
@@ -29,14 +27,13 @@ int get_joybus_bytes(rmt_symbol_word_t* received_symbols,
 
         // if not the first bit and at the end of the current byte, or no
         // more bits to write
-        if((bit_i > 0 && bit_i % 7 == 0) || bit_i == len_symbols - 1)
+        if((bit_i > 0 && bit_i % 8 == 7) || bit_i == len_symbols - 1)
         {
-            out_bytes[byte_i] = current_byte;
+            bytes_buffer[byte_i] = current_byte;
             current_byte = 0;
             byte_i++;
         }
     }
 
-    memcpy(bytes_buffer, out_bytes, BYTES_LEN(len_symbols));
     return 1;
 }
