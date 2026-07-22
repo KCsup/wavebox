@@ -16,6 +16,9 @@
 
 #define JOYBUS_BIT_IDEAL_TICKS 12
 
+#define JOYBUS_MIN_SYMBOL_NS 800
+#define JOYBUS_MAX_SYMBOL_NS 4000
+
 // TODO: URGENT, find why diving length by 8 does not function
 #define BYTES_LEN(len) ((len) / 8)
 

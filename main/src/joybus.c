@@ -1,6 +1,5 @@
 #include "joybus.h"
 #include "hal/rmt_types.h"
-#include <string.h>
 
 IRAM_ATTR int get_joybus_bytes(rmt_symbol_word_t* received_symbols,
                       size_t len_symbols,
@@ -15,7 +14,7 @@ IRAM_ATTR int get_joybus_bytes(rmt_symbol_word_t* received_symbols,
 
         if(JOYBUS_VALID_1(current_symbol.duration0, current_symbol.duration1))
         {
-            current_byte |= (1u << (bit_i % 8));
+            current_byte |= (1u << (7 - (bit_i % 8)));
         }
         else if(!JOYBUS_VALID_0(current_symbol.duration0, current_symbol.duration1))
         {
