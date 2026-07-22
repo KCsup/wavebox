@@ -1,8 +1,10 @@
 #ifndef _JOYBUS_H
 #define _JOYBUS_H
 
+#include "esp_attr.h"
 #include "hal/rmt_types.h"
 #include "stdio.h"
+#include <stdint.h>
 
 // 10 MHz -> 0.1 us = 1 tick
 #define JOYBUS_CLK_PRECISION (10 * 1000 * 1000)
@@ -11,6 +13,8 @@
 #define JOYBUS_BIT_MIN_TICKS 10
 // maximum 1.4 us for valid bit
 #define JOYBUS_BIT_MAX_TICKS 14
+
+#define JOYBUS_BIT_IDEAL_TICKS 12
 
 // TODO: URGENT, find why diving length by 8 does not function
 #define BYTES_LEN(len) ((len) / 8)
@@ -27,8 +31,14 @@
 // writes the blocked command bytes from an RX symbol to the given buffer
 // returns if all bytes were within the tick contraints for a valid bit
 // un-filtered, relying on the caller for correct symbols length
-int get_joybus_bytes(rmt_symbol_word_t* received_symbols,
+IRAM_ATTR int get_joybus_bytes(rmt_symbol_word_t* received_symbols,
                       size_t len_symbols,
                       uint8_t bytes_buffer[BYTES_LEN(len_symbols)]);
+
+// encodes joybus bytes from MSB down
+IRAM_ATTR void encode_joybus_bytes(int len_bytes,
+                         uint8_t in_bytes[len_bytes],
+                         rmt_symbol_word_t symbols_buffer[(len_bytes * 8) + 1]);
+
 
 #endif

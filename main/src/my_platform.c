@@ -73,7 +73,6 @@ static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char* 
     // filter out non-gamepads
     if(((cod & UNI_BT_COD_MINOR_MASK) & UNI_BT_COD_MINOR_GAMEPAD) != UNI_BT_COD_MINOR_GAMEPAD)
     {
-        logi("Ignoring non-gamepad\n");
         return UNI_ERROR_IGNORE_DEVICE;
     }
 

@@ -3,11 +3,9 @@
 #include "controller/uni_gamepad.h"
 
 #include "wavebox.h"
-#include "driver/rmt_encoder.h"
-#include "driver/rmt_types.h"
 #include "esp_err.h"
 #include "freertos/idf_additions.h"
-#include "hal/rmt_types.h"
+#include "hal/rmt_ll.h"
 #include "my_platform.h"
 #include "joybus.h"
 
@@ -15,16 +13,15 @@
 #include <btstack_port_esp32.h>
 #include <btstack_run_loop.h>
 #include <btstack_stdio_esp32.h>
-#include <hci_dump.h>
-#include <hci_dump_embedded_stdout.h>
 #include <uni.h>
 
 #include <driver/rmt_rx.h>
 #include <driver/rmt_tx.h>
+#include "driver/rmt_types.h"
+#include "soc/rmt_struct.h"
 
-#include "portmacro.h"
-#include "sdkconfig.h"
-#include "soc/clk_tree_defs.h"
+#include "rmt_private.h"
+
 
 // pin 18 is the GPIO output
 #define PIN_OUT 18
@@ -81,19 +78,18 @@ int app_main(void)
 
 typedef struct {
     rmt_channel_handle_t tx_chann;
-    rmt_encoder_handle_t tx_chann_encoder;
-    const rmt_transmit_config_t* tx_conf;
-    TaskHandle_t wavebox_task;
+    TaskHandle_t wavebox_task
 } joybus_isr_ctx_t;
 
 
-bool joybus_rx_callback(rmt_channel_handle_t rx_chann, const rmt_rx_done_event_data_t* rx_event_data, void* user_ctx)
+IRAM_ATTR bool joybus_rx_callback(rmt_channel_handle_t rx_chann, const rmt_rx_done_event_data_t* rx_event_data, void* user_ctx)
 {
     joybus_isr_ctx_t* isr_ctx = (joybus_isr_ctx_t*) user_ctx;
     BaseType_t high_task_wakeup = pdFALSE;
 
+    
     do
-        {
+    {
         // during testing, the stop bytes was always appended to the end of
         // the symbol transactions
         // plus, erronious transactions had single symbols added (with zero
@@ -115,18 +111,38 @@ bool joybus_rx_callback(rmt_channel_handle_t rx_chann, const rmt_rx_done_event_d
                              joybus_bytes)) break;
 
 
+        struct rmt_channel_t *raw_tx = (struct rmt_channel_t*) isr_ctx->tx_chann;
+        int channel_id = raw_tx->channel_id;
+        rmt_dev_t *dev = raw_tx->group->hal.regs;
 
+    
         switch(joybus_bytes[0]) // must be at least a single byte
         {
             case 0x00: // ID
-                uint8_t id_payload[] = {0x00, 0x09, 0x20};
-            
-                rmt_transmit(isr_ctx->tx_chann, isr_ctx->tx_chann_encoder, id_payload, sizeof(id_payload), isr_ctx->tx_conf);
+                // 3 bytes + stop bit = 25 bits
+                rmt_symbol_word_t id_payload[25];
+                uint8_t payload[] = {0x09, 0x00, 0x20};
+
+                encode_joybus_bytes(3, payload, id_payload);
+                memcpy(raw_tx->hw_mem_base, id_payload, sizeof(id_payload));
+
+
+                // after stop bit
+                raw_tx->hw_mem_base[25] = (rmt_symbol_word_t){ .duration0 = 0, .level0 = 1, .duration1 = 0, .level1 = 1 };
+
+                rmt_ll_tx_reset_pointer(dev, channel_id);
+                rmt_ll_tx_fix_idle_level(dev, channel_id, 1, true); // matches eot
+                rmt_ll_tx_start(dev, channel_id);
+        
+                break;
+            case 0x41:
+                logi("ORIGIN RECEIVED");
                 break;
             default: // not handled command byte
                 break;
         }
-    } while(0);
+    }
+    while(0);
 
     vTaskNotifyGiveFromISR(isr_ctx->wavebox_task, &high_task_wakeup);
     return high_task_wakeup == pdTRUE;
@@ -162,6 +178,7 @@ void wavebox_exec_task(void* controller_queue)
         .gpio_num = JOYBUS_GPIO,
         .flags.invert_in = false,
         .flags.with_dma = false,
+        .intr_priority = 3
     };
 
     ESP_ERROR_CHECK(rmt_new_rx_channel(&rx_chann_conf, &rx_chann));
@@ -169,6 +186,15 @@ void wavebox_exec_task(void* controller_queue)
     rmt_rx_event_callbacks_t rx_callbacks = {
         .on_recv_done = joybus_rx_callback
     };
+    // 
+    // initiate RMT RX transactions
+    rmt_receive_config_t rx_receive_conf = {
+        .signal_range_min_ns = 800, // 0.8 us
+        .signal_range_max_ns = 4000 // 4 us
+    };
+
+    rmt_symbol_word_t raw_rmt_symbols[64];
+
 
     
     // ----
@@ -195,56 +221,51 @@ void wavebox_exec_task(void* controller_queue)
 
     
     ESP_ERROR_CHECK(rmt_enable(tx_chann));
-    
+
     // ----
 
     // joybys TX encoder
-    rmt_bytes_encoder_config_t rmt_encoder_conf = {
-        .bit0 = {
-            .duration0 = JOYBUS_BIT_MIN_TICKS * 3,
-            .level0 = 0,
-            .duration1 = JOYBUS_BIT_MIN_TICKS,
-            .level1 = 1
-        },
-        .bit1 = {
-            .duration0 = JOYBUS_BIT_MIN_TICKS,
-            .level0 = 0,
-            .duration1 = JOYBUS_BIT_MIN_TICKS * 3,
-            .level1 = 1
-        },
-        .flags.msb_first = true
-    };
+    // rmt_bytes_encoder_config_t rmt_encoder_conf = {
+    //     .bit0 = {
+    //         .duration0 = JOYBUS_BIT_MIN_TICKS * 3,
+    //         .level0 = 0,
+    //         .duration1 = JOYBUS_BIT_MIN_TICKS,
+    //         .level1 = 1
+    //     },
+    //     .bit1 = {
+    //         .duration0 = JOYBUS_BIT_MIN_TICKS,
+    //         .level0 = 0,
+    //         .duration1 = JOYBUS_BIT_MIN_TICKS * 3,
+    //         .level1 = 1
+    //     },
+    //     .flags.msb_first = true
+    // };
 
-    rmt_encoder_handle_t tx_chann_encoder;
-    ESP_ERROR_CHECK(rmt_new_bytes_encoder(&rmt_encoder_conf, &tx_chann_encoder));
+    // rmt_copy_encoder_config_t copy_encoder_conf = {};
+
+    // rmt_encoder_handle_t tx_chann_encoder;
+    // ESP_ERROR_CHECK(rmt_new_bytes_encoder(&rmt_encoder_conf, &tx_chann_encoder));
 
     // TX transmit conf
-    rmt_transmit_config_t rmt_transmit_conf = {
-        .loop_count = 0,
-        .flags.queue_nonblocking = true, // for ISR safety
-        .flags.eot_level = 1 // releases line to be pulled up again
-    };
+    // rmt_transmit_config_t rmt_transmit_conf = {
+    //     .loop_count = 0,
+    //     .flags.queue_nonblocking = true, // for ISR safety
+    //     .flags.eot_level = 1 // releases line to be pulled up again
+    // };
 
-    // initiate RMT RX transactions
-    rmt_receive_config_t rx_receive_conf = {
-        .signal_range_min_ns = 800, // 0.8 us
-        .signal_range_max_ns = 4000 // 4 us
-    };
-
-    rmt_symbol_word_t raw_rmt_symbols[64];
 
     joybus_isr_ctx_t isr_ctx = {
         .tx_chann = tx_chann,
-        .tx_chann_encoder = tx_chann_encoder,
-        .tx_conf = &rmt_transmit_conf,
         .wavebox_task = xTaskGetCurrentTaskHandle()
+        // .tx_chann_id = chann_id
     };
     
     // pass RX data queue
     rmt_rx_register_event_callbacks(rx_chann, &rx_callbacks, &isr_ctx);
     
+    struct rmt_channel_t *raw_rx_debug = (struct rmt_channel_t *)rx_chann;
     ESP_ERROR_CHECK(rmt_enable(rx_chann));
-
+    logi("RX fsm right after enable: %d\n", atomic_load(&raw_rx_debug->fsm));
     
     // TODO: handle no queue state pushed
     while(1)
@@ -253,8 +274,6 @@ void wavebox_exec_task(void* controller_queue)
         ESP_ERROR_CHECK(rmt_receive(rx_chann, raw_rmt_symbols, sizeof(raw_rmt_symbols), &rx_receive_conf));
         
         // wait for RMT signal RX
-        // rmt_rx_done_event_data_t rx_event_data;
-        // xQueueReceive(rmt_rx_queue, &rx_event_data, portMAX_DELAY);
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
 
